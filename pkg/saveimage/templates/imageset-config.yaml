@@ -1,0 +1,36 @@
+kind: ImageSetConfiguration
+apiVersion: mirror.openshift.io/v1alpha2
+storageConfig:
+  local:
+    path: {{.WorkspacePath}}
+mirror:
+  platform:
+    channels:
+    - name: {{.OCPChannel}}-{{.OCPVerMajor}}
+      minVersion: {{.OCPVer}}
+      maxVersion: {{.OCPVer}}
+      type: ocp
+#      shortestPath: true
+    graph: true
+  
+  # 可选: 添加 operators 同步配置
+  {{- if .IncludeOperators}}
+  operators:
+  - catalog: {{.OperatorCatalog}}
+    packages:
+    {{- range .OperatorPackages}}
+    - name: {{.Name}}
+      {{- if .Channel}}
+      channels:
+      - name: {{.Channel}}
+      {{- end}}
+    {{- end}}
+  {{- end}}
+
+  # 可选: 添加额外镜像同步配置  
+  {{- if .AdditionalImages}}
+  additionalImages:
+  {{- range .AdditionalImages}}
+  - name: {{.}}
+  {{- end}}
+  {{- end}} 

@@ -1,0 +1,265 @@
+---
+- name: Deploy Registry Node
+  hosts: registry
+  become: true
+  vars:
+    cluster_name: "{{ cluster_info.name }}"
+    cluster_domain: "{{ cluster_info.domain }}"
+    cluster_id: "{{ cluster_info.cluster_id }}"
+    registry_ip: "{{ registry.ip }}"
+    registry_storage_path: "{{ registry.storage_path }}"
+    registry_user: "{{ registry.registry_user }}"
+    registry_hostname: "registry.{{ cluster_name }}.{{ cluster_domain }}"
+    bastion_ip: "{{ bastion.ip }}"
+  tasks:
+    - name: Debug system information
+      debug:
+        msg: 
+          - "OS Family: {{ ansible_os_family }}"
+          - "Distribution: {{ ansible_distribution }}"
+          - "Distribution Version: {{ ansible_distribution_version }}"
+          - "Distribution Major Version: {{ ansible_distribution_major_version }}"
+          - "Registry Hostname: {{ registry_hostname }}"
+          - "Bastion IP: {{ bastion_ip }}"
+
+    - name: Configure DNS to use bastion as DNS server
+      lineinfile:
+        path: /etc/resolv.conf
+        regexp: '^nameserver'
+        line: "nameserver {{ bastion_ip }}"
+        backup: yes
+
+    - name: Set hostname to registry.cluster.domain
+      hostname:
+        name: "{{ registry_hostname }}"
+
+    - name: Update /etc/hosts with registry hostname
+      lineinfile:
+        path: /etc/hosts
+        regexp: "^{{ registry_ip }}.*"
+        line: "{{ registry_ip }} {{ registry_hostname }} registry"
+        backup: yes
+
+    - name: Install required packages
+      yum:
+        name:
+          - make
+          - jq
+          - python3-jinja2
+          - python3-pyyaml
+          - ncurses
+          - which
+          - file
+          - hostname
+          - diffutils
+          - podman
+          - bind-utils
+          - nmstate
+          - net-tools
+          - skopeo
+          - openssl
+          - coreos-installer
+          - httpd
+        state: present
+
+    - name: Stop and disable firewalld
+      systemd:
+        name: firewalld
+        state: stopped
+        enabled: no
+      ignore_errors: true
+    
+    - name: Disable SELinux permanently
+      lineinfile:
+        path: /etc/selinux/config
+        regexp: '^SELINUX='
+        line: 'SELINUX=disabled'
+
+    - name: Set SELinux to permissive mode temporarily
+      command: setenforce 0
+      ignore_errors: true
+
+    - name: Create registry storage directory
+      file:
+        path: "{{ registry_storage_path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Check if mirror-registry exists in downloads
+      stat:
+        path: "{{ project_root }}/{{ cluster_dir }}/downloads/mirror-registry-amd64.tar.gz"
+      register: mirror_registry_file
+      delegate_to: localhost
+      become: false
+
+    - name: Copy mirror-registry to registry node
+      copy:
+        src: "{{ project_root }}/{{ cluster_dir }}/downloads/mirror-registry-amd64.tar.gz"
+        dest: "/tmp/mirror-registry-amd64.tar.gz"
+        owner: root
+        group: root
+        mode: '0644'
+      when: mirror_registry_file.stat.exists
+
+    - name: Extract mirror-registry
+      unarchive:
+        src: "/tmp/mirror-registry-amd64.tar.gz"
+        dest: "/tmp/"
+        remote_src: yes
+        owner: root
+        group: root
+      when: mirror_registry_file.stat.exists
+
+    - name: Check if oc binary exists in downloads/bin
+      stat:
+        path: "{{ project_root }}/{{ cluster_dir }}/downloads/bin/oc"
+      register: oc_binary
+      delegate_to: localhost
+      become: false
+
+    - name: Check if kubectl binary exists in downloads/bin
+      stat:
+        path: "{{ project_root }}/{{ cluster_dir }}/downloads/bin/kubectl"
+      register: kubectl_binary
+      delegate_to: localhost
+      become: false
+
+
+    - name: Copy oc binary to /usr/bin/
+      copy:
+        src: "{{ project_root }}/{{ cluster_dir }}/downloads/bin/oc"
+        dest: /usr/bin/oc
+        owner: root
+        group: root
+        mode: '0755'
+      when: oc_binary.stat.exists
+
+    - name: Copy kubectl binary to /usr/bin/
+      copy:
+        src: "{{ project_root }}/{{ cluster_dir }}/downloads/bin/kubectl"
+        dest: /usr/bin/kubectl
+        owner: root
+        group: root
+        mode: '0755'
+      when: kubectl_binary.stat.exists
+
+
+    - name: Verify oc installation
+      command: /usr/bin/oc version --client
+      register: oc_version
+      failed_when: oc_version.rc != 0
+      changed_when: false
+      when: oc_binary.stat.exists
+
+    - name: Show oc version
+      debug:
+        var: oc_version.stdout_lines
+      when: oc_binary.stat.exists
+
+    - name: Verify kubectl installation
+      command: /usr/bin/kubectl version --client
+      register: kubectl_version
+      failed_when: kubectl_version.rc != 0
+      changed_when: false
+      when: kubectl_binary.stat.exists
+
+    - name: Show kubectl version
+      debug:
+        var: kubectl_version.stdout_lines
+      when: kubectl_binary.stat.exists
+
+    - name: Test podman functionality
+      command: podman version
+      register: podman_test
+      failed_when: podman_test.rc != 0
+      changed_when: false
+
+    - name: Show podman version
+      debug:
+        var: podman_test.stdout_lines
+
+    - name: Check if image-archive.tar exists in extracted mirror-registry
+      stat:
+        path: "/tmp/image-archive.tar"
+      register: image_archive_file
+
+    - name: Install mirror-registry with image archive and hostname
+      command: >
+        /tmp/mirror-registry install
+        --image-archive /tmp/image-archive.tar
+        --initUser {{ registry_user }}
+        --initPassword ztesoft123
+        --quayRoot {{ registry_storage_path }}
+        --quayHostname {{ registry_hostname }}
+      register: mirror_registry_install
+      when: mirror_registry_file.stat.exists and image_archive_file.stat.exists
+      args:
+        chdir: /tmp
+
+    - name: Show mirror-registry installation output
+      debug:
+        var: mirror_registry_install.stdout_lines
+      when: mirror_registry_install is defined and mirror_registry_install.stdout_lines is defined
+
+    - name: Wait for Quay service to be ready
+      uri:
+        url: "https://localhost:8443/health/instance"
+        method: GET
+        validate_certs: no
+        status_code: 200
+      register: quay_health_check
+      until: quay_health_check.status == 200
+      retries: 30
+      delay: 10
+      when: mirror_registry_install is succeeded
+
+    - name: Display registry access information
+      debug:
+        msg:
+          - "Mirror Registry installation completed successfully!"
+          - "Registry URL: https://{{ registry_hostname }}:8443"
+          - "Registry IP: https://{{ registry_ip }}:8443"
+          - "Username: {{ registry_user }}"
+          - "Password: ztesoft123"
+          - "Config data stored in: ~/quay-install"
+          - "Note: Quay is running with hostname {{ registry_hostname }}"
+      when: mirror_registry_install is succeeded
+
+    - name: Create local registry config directory
+      file:
+        path: "{{ project_root }}/{{ cluster_dir }}/registry/{{ registry_ip }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      become: false
+      when: mirror_registry_install is succeeded
+
+    - name: Synchronize quay-config directory from registry node
+      synchronize:
+        src: "{{ registry_storage_path }}/quay-config/"
+        dest: "{{ project_root }}/{{ cluster_dir }}/registry/{{ registry_ip }}/"
+        mode: pull
+        recursive: yes
+        delete: no
+      when: mirror_registry_install is succeeded
+
+    - name: Synchronize quay-rootCA directory from registry node
+      synchronize:
+        src: "{{ registry_storage_path }}/quay-rootCA/"
+        dest: "{{ project_root }}/{{ cluster_dir }}/registry/{{ registry_ip }}/"
+        mode: pull
+        recursive: yes
+        delete: no
+      when: mirror_registry_install is succeeded
+
+    - name: Display local config information
+      debug:
+        msg:
+          - "Registry configuration files have been downloaded to:"
+          - "  {{ project_root }}/{{ cluster_dir }}/registry/{{ registry_ip }}/quay-config/"
+          - "  {{ project_root }}/{{ cluster_dir }}/registry/{{ registry_ip }}/quay-rootCA/"
+          - "These files contain SSL certificates and configuration needed for mirror operations."
+          - "Registry hostname: {{ registry_hostname }}"
+      when: mirror_registry_install is succeeded 

@@ -1,0 +1,246 @@
+---
+- name: Deploy PXE Server on Bastion Node
+  hosts: pxe
+  become: true
+  vars:
+    cluster_name: "{{ cluster_info.name }}"
+    cluster_domain: "{{ cluster_info.domain }}"
+    cluster_id: "{{ cluster_info.cluster_id }}"
+    bastion_ip: "{{ bastion.ip }}"
+    
+  tasks:
+    - name: Debug system information
+      debug:
+        msg: 
+          - "OS Family: {{ ansible_os_family }}"
+          - "Distribution: {{ ansible_distribution }}"
+          - "Distribution Version: {{ ansible_distribution_version }}"
+          - "Distribution Major Version: {{ ansible_distribution_major_version }}"
+
+    - name: Install PXE required packages
+      yum:
+        name:
+          - tftp-server
+          - httpd
+          - dhcp-server
+          - syslinux
+          - syslinux-tftpboot
+        state: present
+
+    - name: Install iPXE packages (optional)
+      yum:
+        name:
+          - ipxe-bootimgs
+        state: present
+      ignore_errors: true
+
+    - name: Configure httpd to use port 8080 (avoid conflict with HAProxy)
+      lineinfile:
+        path: /etc/httpd/conf/httpd.conf
+        regexp: '^Listen 80'
+        line: 'Listen 8080'
+        backup: yes
+      notify: restart httpd
+
+    - name: Configure Apache directory for PXE files
+      blockinfile:
+        path: /etc/httpd/conf/httpd.conf
+        block: |
+          <Directory "/var/www/html/pxe">
+              Options Indexes FollowSymLinks
+              AllowOverride None
+              Require all granted
+          </Directory>
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - PXE Directory"
+        backup: yes
+      notify: restart httpd
+
+    - name: Create TFTP boot directory
+      file:
+        path: /var/lib/tftpboot
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create PXE directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /var/lib/tftpboot/pxelinux.cfg
+        - /var/lib/tftpboot/images
+        - /var/lib/tftpboot/images/{{ cluster_name }}
+        - /var/www/html/pxe
+        - /var/www/html/pxe/{{ cluster_name }}
+
+    - name: Copy syslinux files to TFTP directory
+      copy:
+        src: "{{ item }}"
+        dest: /var/lib/tftpboot/
+        remote_src: yes
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - /usr/share/syslinux/pxelinux.0
+        - /usr/share/syslinux/menu.c32
+        - /usr/share/syslinux/ldlinux.c32
+        - /usr/share/syslinux/libcom32.c32
+        - /usr/share/syslinux/libutil.c32
+      ignore_errors: true
+
+    - name: Copy iPXE files to TFTP directory
+      copy:
+        src: "{{ item }}"
+        dest: /var/lib/tftpboot/
+        remote_src: yes
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - /usr/share/ipxe/ipxe.lkrn
+        - /usr/share/ipxe/undionly.kpxe
+      ignore_errors: true
+
+    - name: Create TFTP service file
+      copy:
+        dest: /etc/systemd/system/tftp.service
+        content: |
+          [Unit]
+          Description=TFTP Server
+          Requires=tftp.socket
+          
+          [Service]
+          ExecStart=/usr/sbin/in.tftpd -s /var/lib/tftpboot
+          StandardInput=socket
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart tftp
+
+    - name: Create TFTP socket file
+      copy:
+        dest: /etc/systemd/system/tftp.socket
+        content: |
+          [Unit]
+          Description=TFTP Server Socket
+          
+          [Socket]
+          ListenDatagram=69
+          BindIPv6Only=no
+          ReusePort=yes
+          
+          [Install]
+          WantedBy=sockets.target
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart tftp
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Generate PXE default configuration
+      template:
+        src: pxe-default.j2
+        dest: /var/lib/tftpboot/pxelinux.cfg/default
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Start and enable TFTP socket
+      systemd:
+        name: tftp.socket
+        state: started
+        enabled: yes
+
+    - name: Start and enable TFTP service
+      systemd:
+        name: tftp.service
+        state: started
+        enabled: yes
+
+    - name: Start and enable httpd service
+      systemd:
+        name: httpd
+        state: started
+        enabled: yes
+
+    - name: Configure DHCP server
+      template:
+        src: dhcpd.conf.j2
+        dest: /etc/dhcp/dhcpd.conf
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      notify: restart dhcpd
+
+    - name: Start and enable dhcpd service
+      systemd:
+        name: dhcpd
+        state: started
+        enabled: yes
+
+    # 防火墙和 SELinux 已在 deploy-bastion 时关闭，无需额外配置
+
+    - name: Create PXE file upload script
+      template:
+        src: upload-pxe-files.sh.j2
+        dest: /usr/local/bin/upload-pxe-files.sh
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Display PXE service information
+      debug:
+        msg:
+          - "PXE Server deployment completed successfully!"
+          - "TFTP Server: tftp://{{ bastion_ip }} (systemd socket-activated)"
+          - "HTTP Server: http://{{ bastion_ip }}:8080/pxe"
+          - "DHCP Server: {{ bastion_ip }} (configured with MAC-IP mappings)"
+          - "PXE Boot files location: /var/lib/tftpboot"
+          - "HTTP files location: /var/www/html/pxe"
+          - "Upload PXE files using: /usr/local/bin/upload-pxe-files.sh"
+          - ""
+          - "Services configured:"
+          - "  • TFTP: systemd socket-activated (tftp.socket + tftp.service)"
+          - "  • HTTP: Apache on port 8080 (avoids HAProxy conflict)"
+          - "  • DHCP: ISC DHCP with MAC-IP reservations"
+          - ""
+          - "Next steps:"
+          - "1. Generate PXE files: ocpack setup-pxe {{ cluster_name }}"
+          - "2. Upload files to PXE server using the upload script"
+          - "3. DHCP server is already configured with MAC-IP mappings"
+          - "4. Boot target machines via PXE (supports both traditional PXE and iPXE)"
+          - ""
+          - "Expected PXE files:"
+          - "  • agent.x86_64-vmlinuz (kernel)"
+          - "  • agent.x86_64-initrd.img (initrd)"
+          - "  • agent.x86_64-rootfs.img (rootfs)"
+          - "  • agent.x86_64.ipxe (iPXE script)"
+
+  handlers:
+    - name: restart tftp
+      systemd:
+        name: "{{ item }}"
+        state: restarted
+        daemon_reload: yes
+      loop:
+        - tftp.socket
+        - tftp.service
+
+    - name: restart httpd
+      systemd:
+        name: httpd
+        state: restarted
+
+    - name: restart dhcpd
+      systemd:
+        name: dhcpd
+        state: restarted 

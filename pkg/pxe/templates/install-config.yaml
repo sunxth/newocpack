@@ -1,0 +1,45 @@
+apiVersion: v1
+baseDomain: {{ .BaseDomain }}
+{{- if .UseProxy }}
+proxy:
+  httpProxy: {{ .HTTPProxy }}
+  httpsProxy: {{ .HTTPSProxy }}
+  noProxy: {{ .NoProxy }}
+{{- end }}
+metadata:
+  name: {{ .ClusterName }}
+compute:
+- architecture: {{ .ArchShort }}
+  hyperthreading: Enabled
+  name: worker
+  replicas: {{ .NumWorkers }}
+controlPlane:
+  architecture: {{ .ArchShort }}
+  hyperthreading: Enabled
+  name: master
+  replicas: {{ .NumMasters }}
+networking:
+  clusterNetwork:
+  - cidr: 10.128.0.0/14
+    hostPrefix: {{ .HostPrefix }}
+  machineNetwork:
+  - cidr: {{ .MachineNetwork }}/{{ .PrefixLength }}
+  networkType: OVNKubernetes
+  serviceNetwork:
+  - 172.30.0.0/16
+platform:
+  none: {}
+pullSecret: |
+{{ .PullSecret | indent 2 }}
+{{- if ne .SSHKeyPub "" }}
+sshKey: |
+{{ .SSHKeyPub | indent 2 }}
+{{- end }}
+{{- if ne .AdditionalTrustBundle "" }}
+additionalTrustBundle: |
+{{ .AdditionalTrustBundle | indent 2 }}
+{{- end }}
+{{- if ne .ImageContentSources "" }}
+imageContentSources:
+{{ .ImageContentSources | indent 2 }}
+{{- end }} 

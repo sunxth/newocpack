@@ -1,0 +1,163 @@
+#!/bin/bash
+
+# OpenShift {{ cluster_name }} PXE Files Upload Script
+# This script uploads PXE files from the cluster directory to the PXE server
+
+CLUSTER_NAME="{{ cluster_name }}"
+TFTP_DIR="/var/lib/tftpboot"
+HTTP_DIR="/var/www/html/pxe"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+echo -e "${BLUE}OpenShift ${CLUSTER_NAME} PXE Files Upload Script${NC}"
+echo "=================================================="
+
+# Function to print colored messages
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Check if running as root
+if [[ $EUID -ne 0 ]]; then
+   print_error "This script must be run as root"
+   exit 1
+fi
+
+# Function to upload PXE files
+upload_pxe_files() {
+    local source_dir="$1"
+    
+    if [[ ! -d "$source_dir" ]]; then
+        print_error "Source directory not found: $source_dir"
+        print_info "Please specify the correct path to your cluster's PXE files directory"
+        print_info "Usage: $0 /path/to/cluster/pxe/files"
+        exit 1
+    fi
+    
+    print_info "Uploading PXE files from: $source_dir"
+    
+    # Create target directories
+    mkdir -p "${TFTP_DIR}/images/${CLUSTER_NAME}"
+    mkdir -p "${HTTP_DIR}/${CLUSTER_NAME}"
+    
+    # Copy kernel and initrd to both TFTP and HTTP directories
+    # TFTP: for traditional PXE boot
+    # HTTP: for iPXE boot
+    
+    if [[ -f "$source_dir/agent.x86_64-vmlinuz" ]]; then
+        # Copy to TFTP directory (for traditional PXE)
+        cp "$source_dir/agent.x86_64-vmlinuz" "${TFTP_DIR}/images/${CLUSTER_NAME}/"
+        chown root:root "${TFTP_DIR}/images/${CLUSTER_NAME}/agent.x86_64-vmlinuz"
+        # Copy to HTTP directory (for iPXE)
+        cp "$source_dir/agent.x86_64-vmlinuz" "${HTTP_DIR}/${CLUSTER_NAME}/"
+        chown apache:apache "${HTTP_DIR}/${CLUSTER_NAME}/agent.x86_64-vmlinuz"
+        print_success "Copied agent.x86_64-vmlinuz to TFTP and HTTP directories"
+    else
+        print_warning "agent.x86_64-vmlinuz not found in source directory"
+    fi
+    
+    if [[ -f "$source_dir/agent.x86_64-initrd.img" ]]; then
+        # Copy to TFTP directory (for traditional PXE)
+        cp "$source_dir/agent.x86_64-initrd.img" "${TFTP_DIR}/images/${CLUSTER_NAME}/"
+        chown root:root "${TFTP_DIR}/images/${CLUSTER_NAME}/agent.x86_64-initrd.img"
+        # Copy to HTTP directory (for iPXE)
+        cp "$source_dir/agent.x86_64-initrd.img" "${HTTP_DIR}/${CLUSTER_NAME}/"
+        chown apache:apache "${HTTP_DIR}/${CLUSTER_NAME}/agent.x86_64-initrd.img"
+        print_success "Copied agent.x86_64-initrd.img to TFTP and HTTP directories"
+    else
+        print_warning "agent.x86_64-initrd.img not found in source directory"
+    fi
+    
+    # Copy rootfs to HTTP directory only (too large for TFTP)
+    if [[ -f "$source_dir/agent.x86_64-rootfs.img" ]]; then
+        cp "$source_dir/agent.x86_64-rootfs.img" "${HTTP_DIR}/${CLUSTER_NAME}/"
+        chown apache:apache "${HTTP_DIR}/${CLUSTER_NAME}/agent.x86_64-rootfs.img"
+        print_success "Copied agent.x86_64-rootfs.img to HTTP directory"
+    else
+        print_warning "agent.x86_64-rootfs.img not found in source directory"
+    fi
+    
+    # Copy iPXE script to HTTP directory
+    if [[ -f "$source_dir/agent.x86_64.ipxe" ]]; then
+        cp "$source_dir/agent.x86_64.ipxe" "${HTTP_DIR}/${CLUSTER_NAME}/"
+        chown apache:apache "${HTTP_DIR}/${CLUSTER_NAME}/agent.x86_64.ipxe"
+        print_success "Copied agent.x86_64.ipxe to HTTP directory"
+    else
+        print_warning "agent.x86_64.ipxe not found in source directory"
+    fi
+    
+    # Copy any additional files
+    for file in "$source_dir"/*; do
+        if [[ -f "$file" ]]; then
+            filename=$(basename "$file")
+            case "$filename" in
+                agent.x86_64-vmlinuz|agent.x86_64-initrd.img|agent.x86_64-rootfs.img|agent.x86_64.ipxe)
+                    # Already handled above
+                    ;;
+                *)
+                    cp "$file" "${HTTP_DIR}/${CLUSTER_NAME}/"
+                    chown apache:apache "${HTTP_DIR}/${CLUSTER_NAME}/$filename"
+                    print_info "Copied additional file: $filename"
+                    ;;
+            esac
+        fi
+    done
+    
+    print_success "PXE files upload completed!"
+    print_info "TFTP files location: ${TFTP_DIR}/images/${CLUSTER_NAME}/"
+    print_info "HTTP files location: ${HTTP_DIR}/${CLUSTER_NAME}/"
+}
+
+# Main execution
+if [[ $# -eq 0 ]]; then
+    print_info "No source directory specified, looking for default locations..."
+    
+    # Try to find PXE files in common locations
+    possible_dirs=(
+        "/root/${CLUSTER_NAME}/pxe/files"
+        "/home/*/${CLUSTER_NAME}/pxe/files"
+        "./${CLUSTER_NAME}/pxe/files"
+        "./pxe/files"
+    )
+    
+    found=false
+    for dir in "${possible_dirs[@]}"; do
+        if [[ -d "$dir" ]]; then
+            print_info "Found PXE files directory: $dir"
+            upload_pxe_files "$dir"
+            found=true
+            break
+        fi
+    done
+    
+    if [[ "$found" == false ]]; then
+        print_error "No PXE files directory found in default locations"
+        print_info "Please specify the path to your cluster's PXE files directory"
+        print_info "Usage: $0 /path/to/cluster/pxe/files"
+        exit 1
+    fi
+else
+    upload_pxe_files "$1"
+fi
+
+print_info "PXE server is ready for OpenShift ${CLUSTER_NAME} installation"
+print_info "DHCP server is already configured with MAC-IP mappings"
+print_info "HTTP server is running on port 8080 to avoid conflict with HAProxy"
+print_info "Access PXE files via: http://{{ bastion_ip }}:8080/pxe/${CLUSTER_NAME}/" 

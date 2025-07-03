@@ -1,0 +1,42 @@
+apiVersion: v1alpha1
+kind: AgentConfig
+metadata:
+  name: {{ .ClusterName }}
+rendezvousIP: {{ .RendezvousIP }}
+bootArtifactsBaseURL: {{ .BootArtifactsBaseURL }}
+hosts:
+{{- range .Hosts }}
+  - hostname: {{ .Hostname }}
+    role: {{ .Role }}
+    interfaces:
+      - name: {{ $.Port0 }}
+        macAddress: {{ .MACAddress }}
+    networkConfig:
+      interfaces:
+        - name: {{ $.Port0 }}
+          description: Access mode port {{ $.Port0 }}
+          type: ethernet
+          state: up
+          mac-address: {{ .MACAddress }}
+          ipv4:
+            enabled: true
+            address:
+              - ip: {{ .IPAddress }}
+                prefix-length: {{ $.PrefixLength }}
+            dhcp: false
+
+      {{- if $.DNSServers }}
+      dns-resolver:
+        config:
+          server:
+            {{- range $.DNSServers }}
+            - {{ . }}
+            {{- end }}
+      {{- end }}
+
+      routes:
+        config:
+          - destination: 0.0.0.0/0
+            next-hop-address: {{ $.NextHopAddress }}
+            next-hop-interface: {{ $.Port0 }}
+{{- end }} 

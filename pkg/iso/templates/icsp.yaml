@@ -1,0 +1,12 @@
+apiVersion: operator.openshift.io/v1alpha1
+kind: ImageContentSourcePolicy
+metadata:
+  name: release-0
+spec:
+  repositoryDigestMirrors:
+  - mirrors:
+    - {{ .RegistryHost }}:{{ .RegistryPort }}/openshift/release
+    source: quay.io/openshift-release-dev/ocp-v4.0-art-dev
+  - mirrors:
+    - {{ .RegistryHost }}:{{ .RegistryPort }}/openshift/release-images
+    source: quay.io/openshift-release-dev/ocp-release 

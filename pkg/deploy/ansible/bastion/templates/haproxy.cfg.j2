@@ -1,0 +1,89 @@
+global
+    log         127.0.0.1:514 local0
+    chroot      /var/lib/haproxy
+    stats socket /var/lib/haproxy/stats
+    user        haproxy
+    group       haproxy
+    daemon
+
+defaults
+    mode                    http
+    log                     global
+    option                  httplog
+    option                  dontlognull
+    option http-server-close
+    option forwardfor       except 127.0.0.0/8
+    option                  redispatch
+    retries                 3
+    timeout http-request    10s
+    timeout queue           1m
+    timeout connect         10s
+    timeout client          1m
+    timeout server          1m
+    timeout http-keep-alive 10s
+    timeout check           10s
+    maxconn                 3000
+
+# Stats page
+listen stats
+    bind *:9000
+    stats enable
+    stats uri /stats
+    stats refresh 30s
+    stats admin if TRUE
+
+# OpenShift API Server
+frontend openshift-api-server
+    bind *:6443
+    default_backend openshift-api-server
+    mode tcp
+    option tcplog
+
+backend openshift-api-server
+    balance source
+    mode tcp
+{% for cp in cluster.control_plane %}
+    server {{ cp.name }} {{ cp.ip }}:6443 check
+{% endfor %}
+
+# Machine Config Server
+frontend machine-config-server
+    bind *:22623
+    default_backend machine-config-server
+    mode tcp
+    option tcplog
+
+backend machine-config-server
+    balance source
+    mode tcp
+{% for cp in cluster.control_plane %}
+    server {{ cp.name }} {{ cp.ip }}:22623 check
+{% endfor %}
+
+# OpenShift Ingress - HTTP
+frontend openshift-ingress-http
+    bind *:80
+    default_backend openshift-ingress-http
+    mode http
+
+backend openshift-ingress-http
+    balance source
+    mode http
+{% for worker in cluster.worker %}
+    server {{ worker.name }} {{ worker.ip }}:80 check
+{% endfor %}
+
+# OpenShift Ingress - HTTPS
+frontend openshift-ingress-https
+    bind *:443
+    default_backend openshift-ingress-https
+    mode tcp
+    option tcplog
+
+backend openshift-ingress-https
+    balance source
+    mode tcp
+{% for worker in cluster.worker %}
+    server {{ worker.name }} {{ worker.ip }}:443 check
+{% endfor %}
+#test

@@ -1,0 +1,39 @@
+$TTL 86400
+@   IN  SOA {{ cluster_id }}.{{ cluster_domain }}. admin.{{ cluster_id }}.{{ cluster_domain }}. (
+        2024010101  ; Serial
+        3600        ; Refresh
+        1800        ; Retry
+        604800      ; Expire
+        86400       ; Minimum TTL
+)
+
+; Name servers
+@   IN  NS  bastion.{{ cluster_id }}.{{ cluster_domain }}.
+
+; Bastion host
+bastion IN  A   {{ bastion_ip }}
+
+; Registry host
+registry IN  A   {{ registry_ip }}
+
+; OpenShift API
+api     IN  A   {{ bastion_ip }}
+api-int IN  A   {{ bastion_ip }}
+
+; OpenShift Apps wildcard
+*.apps  IN  A   {{ bastion_ip }}
+
+; Control Plane nodes
+{% for cp in cluster.control_plane %}
+{{ cp.name }}   IN  A   {{ cp.ip }}
+{% endfor %}
+
+; Worker nodes  
+{% for worker in cluster.worker %}
+{{ worker.name }}   IN  A   {{ worker.ip }}
+{% endfor %}
+
+; etcd cluster
+{% for cp in cluster.control_plane %}
+_etcd-server-ssl._tcp   IN  SRV 0 10 2380 {{ cp.name }}.{{ cluster_id }}.{{ cluster_domain }}.
+{% endfor %} 

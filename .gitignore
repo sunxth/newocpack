@@ -1,0 +1,82 @@
+# 构建产物
+build/
+dist/
+*.exe
+ocpack
+ocpack-*
+
+# Go 相关
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.work.sum
+
+# 依赖目录
+vendor/
+
+# IDE 和编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 日志文件
+*.log
+
+# 临时文件
+*.tmp
+*.temp
+.tmp/
+.temp/
+
+# 测试覆盖率
+coverage.txt
+coverage.html
+*.cover
+
+# 配置文件（可能包含敏感信息）
+config.toml
+*.toml
+!**/templates/*.toml
+
+# 下载的文件
+downloads/
+demo/
+test_*/
+
+# Ansible 临时文件
+.ansible/
+*.retry
+
+# 证书和密钥
+*.pem
+*.key
+*.crt
+*.csr
+
+# 镜像文件
+*.tar
+*.tar.gz
+*.iso
+
+# 集群相关文件
+*/downloads/
+*/registry/
+*/bastion/
+*/images/
+auth/
+metadata.json
+.openshift_install.log
+.openshift_install_state.json 

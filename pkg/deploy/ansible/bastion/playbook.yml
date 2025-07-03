@@ -1,0 +1,248 @@
+---
+- name: Deploy Bastion Node with DNS and Load Balancer
+  hosts: bastion
+  become: true
+  vars:
+    cluster_name: "{{ cluster_info.name }}"
+    cluster_domain: "{{ cluster_info.domain }}"
+    cluster_id: "{{ cluster_info.cluster_id }}"
+    bastion_ip: "{{ bastion.ip }}"
+    registry_ip: "{{ registry.ip }}"
+    
+  tasks:
+    - name: Debug system information
+      debug:
+        msg: 
+          - "OS Family: {{ ansible_os_family }}"
+          - "Distribution: {{ ansible_distribution }}"
+          - "Distribution Version: {{ ansible_distribution_version }}"
+          - "Distribution Major Version: {{ ansible_distribution_major_version }}"
+
+
+    - name: Install required packages
+      yum:
+        name:
+          - bind
+          - bind-utils
+          - haproxy
+          - firewalld
+        state: present
+
+
+    - name: stop and disable firewalld
+      systemd:
+        name: firewalld
+        state: stopped
+        enabled: no
+      ignore_errors: true
+    
+    - name: disable SELinux permanently
+      lineinfile:
+        path: /etc/selinux/config
+        regexp: '^SELINUX='
+        line: 'SELINUX=disabled'
+
+    - name: Set SELinux to permissive mode temporarily
+      command: setenforce 0
+      ignore_errors: true
+
+    - name: Create bind configuration directory
+      file:
+        path: /etc/named
+        state: directory
+        owner: named
+        group: named
+        mode: '0755'
+
+    - name: Generate bind configuration
+      template:
+        src: named.conf.j2
+        dest: /etc/named.conf
+        owner: root
+        group: named
+        mode: '0640'
+        backup: yes
+      notify: restart bind
+
+    - name: Generate forward zone file
+      template:
+        src: forward.zone.j2
+        dest: "/var/named/{{ cluster_id }}.{{ cluster_domain }}.zone"
+        owner: root
+        group: named
+        mode: '0640'
+      notify: restart bind
+
+    - name: Generate reverse zone file
+      template:
+        src: reverse.zone.j2
+        dest: "/var/named/reverse.zone"
+        owner: root
+        group: named
+        mode: '0640'
+      notify: restart bind
+
+    - name: Generate HAProxy configuration
+      template:
+        src: haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      notify: restart haproxy
+
+    - name: Start and enable bind
+      systemd:
+        name: named
+        state: started
+        enabled: yes
+
+    - name: Add newline to HAProxy config if needed
+      shell: |
+        if [ "$(tail -c1 /etc/haproxy/haproxy.cfg | wc -l)" -eq 0 ]; then
+          echo "" >> /etc/haproxy/haproxy.cfg
+        fi
+      changed_when: false
+
+    - name: Check HAProxy configuration syntax
+      command: haproxy -f /etc/haproxy/haproxy.cfg -c
+      register: haproxy_check
+      failed_when: haproxy_check.rc != 0
+
+    - name: Start and enable haproxy
+      systemd:
+        name: haproxy
+        state: started
+        enabled: yes
+      register: haproxy_start
+      ignore_errors: true
+
+    - name: Get haproxy service status if failed
+      command: systemctl status haproxy.service
+      register: haproxy_status
+      when: haproxy_start.failed
+
+    - name: Show haproxy service status
+      debug:
+        var: haproxy_status.stdout_lines
+      when: haproxy_start.failed
+
+    - name: Get haproxy journal logs if failed
+      command: journalctl -xe -u haproxy.service --no-pager
+      register: haproxy_logs
+      when: haproxy_start.failed
+
+    - name: Show haproxy journal logs
+      debug:
+        var: haproxy_logs.stdout_lines
+      when: haproxy_start.failed
+
+    - name: Fail if haproxy service could not start
+      fail:
+        msg: "HAProxy service failed to start"
+      when: haproxy_start.failed
+
+    - name: Check if oc binary exists in downloads/bin
+      stat:
+        path: "{{ project_root }}/demo/downloads/bin/oc"
+      register: oc_binary
+      delegate_to: localhost
+      become: false
+
+    - name: Check if kubectl binary exists in downloads/bin
+      stat:
+        path: "{{ project_root }}/demo/downloads/bin/kubectl"
+      register: kubectl_binary
+      delegate_to: localhost
+      become: false
+
+    - name: Copy oc binary to /usr/bin/
+      copy:
+        src: "{{ project_root }}/demo/downloads/bin/oc"
+        dest: /usr/bin/oc
+        owner: root
+        group: root
+        mode: '0755'
+      when: oc_binary.stat.exists
+
+    - name: Copy kubectl binary to /usr/bin/
+      copy:
+        src: "{{ project_root }}/demo/downloads/bin/kubectl"
+        dest: /usr/bin/kubectl
+        owner: root
+        group: root
+        mode: '0755'
+      when: kubectl_binary.stat.exists
+
+    - name: Verify oc installation
+      command: /usr/bin/oc version --client
+      register: oc_version
+      failed_when: oc_version.rc != 0
+      changed_when: false
+      when: oc_binary.stat.exists
+
+    - name: Show oc version
+      debug:
+        var: oc_version.stdout_lines
+      when: oc_binary.stat.exists
+
+    - name: Verify kubectl installation
+      command: /usr/bin/kubectl version --client
+      register: kubectl_version
+      failed_when: kubectl_version.rc != 0
+      changed_when: false
+      when: kubectl_binary.stat.exists
+
+    - name: Show kubectl version
+      debug:
+        var: kubectl_version.stdout_lines
+      when: kubectl_binary.stat.exists
+
+    - name: Check bind service status
+      command: systemctl status named
+      register: bind_status
+      failed_when: false
+      changed_when: false
+
+    - name: Show bind service status
+      debug:
+        var: bind_status.stdout_lines
+
+    - name: Check if bind is listening on port 53
+      command: netstat -tulpn | grep :53
+      register: port_53_check
+      failed_when: false
+      changed_when: false
+
+    - name: Show port 53 status
+      debug:
+        var: port_53_check.stdout_lines
+
+    - name: Test DNS resolution
+      command: nslookup api.{{ cluster_id }}.{{ cluster_domain }} {{ bastion_ip }}
+      register: dns_test
+      failed_when: false
+      changed_when: false
+
+    - name: Show DNS test result
+      debug:
+        var: dns_test
+
+    - name: Test HAProxy status
+      uri:
+        url: "http://{{ bastion_ip }}:9000/stats"
+        method: GET
+      register: haproxy_test
+      failed_when: haproxy_test.status != 200
+
+  handlers:
+    - name: restart bind
+      systemd:
+        name: named
+        state: restarted
+
+    - name: restart haproxy
+      systemd:
+        name: haproxy
+        state: restarted 
