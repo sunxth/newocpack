@@ -105,23 +105,27 @@ machine_network = "192.168.1.0/24"
 
 | 命令 | 说明 |
 |------|------|
-| `new cluster <name>` | 创建新的集群项目 |
-| `all <name> [--mode=iso\|pxe]` | **一键执行完整部署流程** |
-| `download <name>` | 下载 OpenShift 安装工具 |
-| `deploy-bastion <name>` | 部署 Bastion 节点 (DNS + HAProxy) |
-| `deploy-registry <name>` | 部署 Registry 节点 |
-| `save-image <name>` | 保存 OpenShift 镜像到本地 |
-| `load-image <name>` | 加载镜像到 Registry |
-| `generate-iso <name>` | 生成安装 ISO 镜像 |
-| `setup-pxe <name>` | 设置 PXE 启动环境 |
-| `mon <name>` | **监控集群安装进度** |
+| `new cluster <n>` | 创建新的集群项目 |
+| `all <n> [--mode=iso\|pxe]` | **一键执行完整部署流程** |
+| `download <n>` | 下载 OpenShift 安装工具 |
+| `deploy-bastion <n>` | 部署 Bastion 节点 (DNS + HAProxy) |
+| `deploy-registry <n>` | 部署 Registry 节点 |
+| `save-image <n>` | 保存 OpenShift 镜像到本地 (使用外部 oc-mirror) |
+| `save demo <n>` | **🆕 保存镜像 (使用内部 mirror 引擎)** |
+| `load-image <n>` | 加载镜像到 Registry |
+| `generate-iso <n>` | 生成安装 ISO 镜像 |
+| `setup-pxe <n>` | 设置 PXE 启动环境 |
+| `mon <n>` | **监控集群安装进度** |
 
 ## 镜像管理
 
 ### 保存镜像
 ```bash
-# 基本保存
+# 传统方法 (使用外部 oc-mirror)
 ocpack save-image my-cluster
+
+# 新方法 (使用内部 mirror 引擎) - 演示版本
+ocpack save demo my-cluster
 
 # 包含 Operator 镜像
 ocpack save-image my-cluster --include-operators

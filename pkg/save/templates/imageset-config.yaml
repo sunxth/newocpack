@@ -1,0 +1,47 @@
+# oc-mirror ImageSetConfiguration
+#
+# 这个文件是根据 pkg/mirror/api/v2alpha1/type_config.go 中的 Go 结构体定义的，
+# 确保与内置的镜像引擎完全兼容。
+#
+apiVersion: mirror.openshift.io/v2alpha1
+kind: ImageSetConfiguration
+
+mirror:
+  # 平台镜像配置
+  platform:
+    channels:
+    # 只镜像一个精确的 OpenShift 版本
+    - name: "{{.OCPChannel}}-{{.OCPVerMajor}}"
+      type: ocp
+      minVersion: "{{.OCPVer}}"
+      maxVersion: "{{.OCPVer}}"
+    # `graph: true` 会下载用于更新的 cincinnati 图数据
+    graph: true
+  
+  # Operator 镜像配置
+  # 只有在 config.toml 中 include_operators = true 时才会生成此部分
+  {{- if .IncludeOperators}}
+  operators:
+  - catalog: {{.OperatorCatalog}}
+    # `full: false` (默认) 表示只拉取指定 channel 的最新版本
+    # 如果需要所有版本，可以在 Go 代码中控制此标志
+    full: false
+    packages:
+    {{- range .OperatorPackages}}
+    - name: "{{.Name}}"
+      # 如果成功获取到默认频道，则只拉取该频道的最新版本
+      {{- if .Channel}}
+      channels:
+      - name: "{{.Channel}}"
+      {{- end}}
+    {{- end}}
+  {{- end}}
+
+  # 额外镜像配置
+  # 添加任何需要独立镜像的附加镜像
+  {{- if .AdditionalImages}}
+  additionalImages:
+  {{- range .AdditionalImages}}
+  - name: "{{.}}"
+  {{- end}}
+  {{- end}}
